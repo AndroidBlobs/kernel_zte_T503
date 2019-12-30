@@ -86,6 +86,7 @@ else
         biarch := -m64
         KBUILD_AFLAGS += -m64
         KBUILD_CFLAGS += -m64
+        KBUILD_CFLAGS += -fno-pic
 
         # Align jump targets to 1 byte, not the default 16 bytes:
         KBUILD_CFLAGS += -falign-jumps=1
@@ -96,6 +97,8 @@ else
         # Don't autogenerate traditional x87 instructions
         KBUILD_CFLAGS += $(call cc-option,-mno-80387)
         KBUILD_CFLAGS += $(call cc-option,-mno-fp-ret-in-387)
+
+        KBUILD_CFLAGS += -fno-pic
 
 	# Use -mpreferred-stack-boundary=3 if supported.
 	KBUILD_CFLAGS += $(call cc-option,-mpreferred-stack-boundary=3)
@@ -179,15 +182,6 @@ KBUILD_CFLAGS += $(cfi) $(cfi-sigframe) $(cfi-sections) $(asinstr) $(avx_instr) 
 
 LDFLAGS := -m elf_$(UTS_MACHINE)
 
-#
-# The 64-bit kernel must be aligned to 2MB.  Pass -z max-page-size=0x200000 to
-# the linker to force 2MB page size regardless of the default page size used
-# by the linker.
-#
-ifdef CONFIG_X86_64
-LDFLAGS += $(call ld-option, -z max-page-size=0x200000)
-endif
-
 # Speed up the build
 KBUILD_CFLAGS += -pipe
 # Workaround for a gcc prelease that unfortunately was shipped in a suse release
@@ -197,14 +191,6 @@ KBUILD_CFLAGS += -fno-asynchronous-unwind-tables
 
 KBUILD_CFLAGS += $(mflags-y)
 KBUILD_AFLAGS += $(mflags-y)
-
-# Avoid indirect branches in kernel to deal with Spectre
-ifdef CONFIG_RETPOLINE
-    RETPOLINE_CFLAGS += $(call cc-option,-mindirect-branch=thunk-extern -mindirect-branch-register)
-    ifneq ($(RETPOLINE_CFLAGS),)
-        KBUILD_CFLAGS += $(RETPOLINE_CFLAGS) -DRETPOLINE
-    endif
-endif
 
 archscripts: scripts_basic
 	$(Q)$(MAKE) $(build)=arch/x86/tools relocs
@@ -246,6 +232,8 @@ drivers-$(CONFIG_FB) += arch/x86/video/
 
 drivers-$(CONFIG_RAS) += arch/x86/ras/
 
+drivers-$(CONFIG_MOBILEVISOR) += arch/x86/mobilevisor/
+
 ####
 # boot loader support. Several targets are kept for legacy purposes
 
@@ -255,8 +243,20 @@ BOOT_TARGETS = bzlilo bzdisk fdimage fdimage144 fdimage288 isoimage
 
 PHONY += bzImage $(BOOT_TARGETS)
 
+ifeq ($(CONFIG_OF),y)
+KBUILD_DTBS     := dtbs
+
+%.dtb: scripts
+	$(Q)$(MAKE) $(build)=$(boot)/dts $(boot)/dts/$@
+
+dtbs: scripts
+	$(Q)$(MAKE) $(build)=$(boot)/dts dtbs
+
+all: bzImage $(KBUILD_DTBS)
+else
 # Default kernel to build
 all: bzImage
+endif
 
 # KBUILD_IMAGE specify target image being built
 KBUILD_IMAGE := $(boot)/bzImage
@@ -284,6 +284,7 @@ archclean:
 	$(Q)rm -rf $(objtree)/arch/i386
 	$(Q)rm -rf $(objtree)/arch/x86_64
 	$(Q)$(MAKE) $(clean)=$(boot)
+	$(Q)$(MAKE) $(clean)=$(boot)/dts
 	$(Q)$(MAKE) $(clean)=arch/x86/tools
 	$(Q)$(MAKE) $(clean)=arch/x86/purgatory
 

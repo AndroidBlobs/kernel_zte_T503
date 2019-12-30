@@ -31,7 +31,7 @@ early_param("noexec", noexec_setup);
 
 void x86_configure_nx(void)
 {
-	if (boot_cpu_has(X86_FEATURE_NX) && !disable_nx)
+	if (cpu_has_nx && !disable_nx)
 		__supported_pte_mask |= _PAGE_NX;
 	else
 		__supported_pte_mask &= ~_PAGE_NX;
@@ -39,7 +39,7 @@ void x86_configure_nx(void)
 
 void __init x86_report_nx(void)
 {
-	if (!boot_cpu_has(X86_FEATURE_NX)) {
+	if (!cpu_has_nx) {
 		printk(KERN_NOTICE "Notice: NX (Execute Disable) protection "
 		       "missing in CPU!\n");
 	} else {

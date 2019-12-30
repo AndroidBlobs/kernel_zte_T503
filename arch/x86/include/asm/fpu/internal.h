@@ -42,7 +42,6 @@ extern void fpu__init_cpu_xstate(void);
 extern void fpu__init_system(struct cpuinfo_x86 *c);
 extern void fpu__init_check_bugs(void);
 extern void fpu__resume_cpu(void);
-extern u64 fpu__get_supported_xfeatures_mask(void);
 
 /*
  * Debugging facility:
@@ -58,7 +57,7 @@ extern u64 fpu__get_supported_xfeatures_mask(void);
  */
 static __always_inline __pure bool use_eager_fpu(void)
 {
-	return true;
+	return static_cpu_has_safe(X86_FEATURE_EAGER_FPU);
 }
 
 static __always_inline __pure bool use_xsaveopt(void)
@@ -596,8 +595,7 @@ switch_fpu_prepare(struct fpu *old_fpu, struct fpu *new_fpu, int cpu)
 	 * If the task has used the math, pre-load the FPU on xsave processors
 	 * or if the past 5 consecutive context-switches used math.
 	 */
-	fpu.preload = static_cpu_has(X86_FEATURE_FPU) &&
-		      new_fpu->fpstate_active &&
+	fpu.preload = new_fpu->fpstate_active &&
 		      (use_eager_fpu() || new_fpu->counter > 5);
 
 	if (old_fpu->fpregs_active) {

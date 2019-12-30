@@ -28,6 +28,10 @@
 
 #include "fault.h"
 
+#ifdef CONFIG_BOOST_SIGKILL_FREE
+#include <linux/boost_sigkill_free.h>
+#endif
+
 #ifdef CONFIG_MMU
 
 #ifdef CONFIG_KPROBES
@@ -152,6 +156,7 @@ __do_kernel_fault(struct mm_struct *mm, unsigned long addr, unsigned int fsr,
 	do_exit(SIGKILL);
 }
 
+#define CONFIG_SPRD_DEBUG_INIT2
 /*
  * Something tried to access memory that isn't in our memory map..
  * User mode accesses just cause a SIGSEGV
@@ -168,6 +173,13 @@ __do_user_fault(struct task_struct *tsk, unsigned long addr,
 	    ((user_debug & UDBG_BUS)  && (sig == SIGBUS))) {
 		printk(KERN_DEBUG "%s: unhandled page fault (%d) at 0x%08lx, code 0x%03x\n",
 		       tsk->comm, sig, addr, fsr);
+		show_pte(tsk->mm, addr);
+		show_regs(regs);
+	}
+#endif
+
+#ifdef CONFIG_SPRD_DEBUG_INIT2
+	if ((sig == 4 || sig == 11) && (!strcmp(tsk->comm, "init") || !strcmp(tsk->comm, "ueventd"))) {
 		show_pte(tsk->mm, addr);
 		show_regs(regs);
 	}
@@ -226,6 +238,15 @@ __do_page_fault(struct mm_struct *mm, unsigned long addr, unsigned int fsr,
 	struct vm_area_struct *vma;
 	int fault;
 
+#ifdef CONFIG_BOOST_SIGKILL_FREE
+	if (unlikely(test_bit(MMF_FAST_FREEING, &mm->flags))) {
+		task_clear_jobctl_pending(tsk, JOBCTL_PENDING_MASK);
+		sigaddset(&tsk->pending.signal, SIGKILL);
+		set_tsk_thread_flag(tsk, TIF_SIGPENDING);
+		return VM_FAULT_BADMAP;
+	}
+#endif
+
 	vma = find_vma(mm, addr);
 	fault = VM_FAULT_BADMAP;
 	if (unlikely(!vma))
@@ -273,10 +294,10 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 		local_irq_enable();
 
 	/*
-	 * If we're in an interrupt or have no user
+	 * If we're in an interrupt, or have no irqs, or have no user
 	 * context, we must not take the fault..
 	 */
-	if (faulthandler_disabled() || !mm)
+	if (faulthandler_disabled() || irqs_disabled() || !mm)
 		goto no_context;
 
 	if (user_mode(regs))
