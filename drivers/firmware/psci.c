@@ -13,6 +13,7 @@
 
 #define pr_fmt(fmt) "psci: " fmt
 
+#include <linux/arm-smccc.h>
 #include <linux/errno.h>
 #include <linux/linkage.h>
 #include <linux/of.h>
@@ -28,6 +29,11 @@
 #include <asm/system_misc.h>
 #include <asm/smp_plat.h>
 #include <asm/suspend.h>
+
+#ifdef CONFIG_TRUSTY
+#include <linux/trusty/smcall.h>
+#include <linux/trusty/trusty.h>
+#endif
 
 /*
  * While a 64-bit OS can make calls with SMC32 calling conventions, for some
@@ -51,15 +57,24 @@ static int resident_cpu = -1;
 
 bool psci_tos_resident_on(int cpu)
 {
+#ifdef CONFIG_TRUSTY
+	int ret;
+
+	ret = trusty_fast_call32_power(SMC_FC_CPU_CAN_DOWN, cpu, 0, 0);
+	if (ret < 0) {
+		pr_debug("tos denied cpu down (%d)\n", ret);
+		return true;
+	} else
+		return false;
+#else
 	return cpu == resident_cpu;
+#endif
 }
 
 struct psci_operations psci_ops;
 
 typedef unsigned long (psci_fn)(unsigned long, unsigned long,
 				unsigned long, unsigned long);
-asmlinkage psci_fn __invoke_psci_fn_hvc;
-asmlinkage psci_fn __invoke_psci_fn_smc;
 static psci_fn *invoke_psci_fn;
 
 enum psci_function {
@@ -107,6 +122,26 @@ bool psci_power_state_is_valid(u32 state)
 	return !(state & ~valid_mask);
 }
 
+static unsigned long __invoke_psci_fn_hvc(unsigned long function_id,
+			unsigned long arg0, unsigned long arg1,
+			unsigned long arg2)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_hvc(function_id, arg0, arg1, arg2, 0, 0, 0, 0, &res);
+	return res.a0;
+}
+
+static unsigned long __invoke_psci_fn_smc(unsigned long function_id,
+			unsigned long arg0, unsigned long arg1,
+			unsigned long arg2)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(function_id, arg0, arg1, arg2, 0, 0, 0, 0, &res);
+	return res.a0;
+}
+
 static int psci_to_linux_errno(int errno)
 {
 	switch (errno) {
@@ -133,6 +168,14 @@ static int psci_cpu_suspend(u32 state, unsigned long entry_point)
 {
 	int err;
 	u32 fn;
+
+#ifdef CONFIG_TRUSTY
+	u32 cpu_id;
+
+	cpu_id = smp_processor_id();
+	if (psci_tos_resident_on(cpu_id))
+		return -EPERM;
+#endif
 
 	fn = psci_function_id[PSCI_FN_CPU_SUSPEND];
 	err = invoke_psci_fn(fn, state, entry_point, 0);
@@ -209,10 +252,17 @@ static int get_set_conduit_method(struct device_node *np)
 	return 0;
 }
 
+#ifdef CONFIG_SPRD_PMIC_WATCHDOG
+static void psci_sys_reset(enum reboot_mode reboot_mode, const char *cmd)
+{
+	invoke_psci_fn(PSCI_0_2_FN_SYSTEM_RESET, reboot_mode_flag, 0, 0);
+}
+#else
 static void psci_sys_reset(enum reboot_mode reboot_mode, const char *cmd)
 {
 	invoke_psci_fn(PSCI_0_2_FN_SYSTEM_RESET, 0, 0, 0);
 }
+#endif
 
 static void psci_sys_poweroff(void)
 {

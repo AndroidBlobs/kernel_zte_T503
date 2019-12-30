@@ -1270,7 +1270,8 @@ void spi_finalize_current_message(struct spi_master *master)
 	spin_lock_irqsave(&master->queue_lock, flags);
 	master->cur_msg = NULL;
 	master->cur_msg_prepared = false;
-	queue_kthread_work(&master->kworker, &master->pump_messages);
+	if (!master->no_idle)
+		queue_kthread_work(&master->kworker, &master->pump_messages);
 	spin_unlock_irqrestore(&master->queue_lock, flags);
 
 	trace_spi_message_done(mesg);
@@ -2069,6 +2070,7 @@ int spi_setup(struct spi_device *spi)
 		spi->mode &= ~ugly_bits;
 		bad_bits &= ~ugly_bits;
 	}
+
 	if (bad_bits) {
 		dev_err(&spi->dev, "setup: unsupported mode bits %x\n",
 			bad_bits);
