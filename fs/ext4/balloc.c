@@ -378,6 +378,8 @@ static int ext4_validate_block_bitmap(struct super_block *sb,
 		return -EFSCORRUPTED;
 
 	ext4_lock_group(sb, block_group);
+	if (buffer_verified(bh))
+		goto verified;
 	if (unlikely(!ext4_block_bitmap_csum_verify(sb, block_group,
 			desc, bh))) {
 		ext4_unlock_group(sb, block_group);
@@ -400,6 +402,7 @@ static int ext4_validate_block_bitmap(struct super_block *sb,
 		return -EFSCORRUPTED;
 	}
 	set_buffer_verified(bh);
+verified:
 	ext4_unlock_group(sb, block_group);
 	return 0;
 }
@@ -582,6 +585,9 @@ static int ext4_has_free_clusters(struct ext4_sb_info *sbi,
 
 	/* Hm, nope.  Are (enough) root reserved clusters available? */
 	if (uid_eq(sbi->s_resuid, current_fsuid()) ||
+#ifdef CONFIG_EXT4_RESERVE_SPACE_FILTER
+		check_have_permission(1) ||
+#endif
 	    (!gid_eq(sbi->s_resgid, GLOBAL_ROOT_GID) && in_group_p(sbi->s_resgid)) ||
 	    capable(CAP_SYS_RESOURCE) ||
 	    (flags & EXT4_MB_USE_ROOT_BLOCKS)) {

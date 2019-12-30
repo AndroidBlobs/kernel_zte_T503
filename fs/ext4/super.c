@@ -817,7 +817,6 @@ static void ext4_put_super(struct super_block *sb)
 	ext4_release_system_zone(sb);
 	ext4_mb_release(sb);
 	ext4_ext_release(sb);
-	ext4_xattr_put_super(sb);
 
 	if (!(sb->s_flags & MS_RDONLY) && !aborted) {
 		ext4_clear_feature_journal_needs_recovery(sb);
@@ -2102,7 +2101,7 @@ static int ext4_check_descriptors(struct super_block *sb,
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	ext4_fsblk_t first_block = le32_to_cpu(sbi->s_es->s_first_data_block);
 	ext4_fsblk_t last_block;
-	ext4_fsblk_t last_bg_block = sb_block + ext4_bg_num_gdb(sb, 0) + 1;
+	ext4_fsblk_t last_bg_block = sb_block + ext4_bg_num_gdb(sb, 0);
 	ext4_fsblk_t block_bitmap;
 	ext4_fsblk_t inode_bitmap;
 	ext4_fsblk_t inode_table;
@@ -3777,13 +3776,13 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 			goto failed_mount2;
 		}
 	}
+	sbi->s_gdb_count = db_count;
 	if (!ext4_check_descriptors(sb, logical_sb_block, &first_not_zeroed)) {
 		ext4_msg(sb, KERN_ERR, "group descriptors corrupted!");
 		ret = -EFSCORRUPTED;
 		goto failed_mount2;
 	}
 
-	sbi->s_gdb_count = db_count;
 	get_random_bytes(&sbi->s_next_generation, sizeof(u32));
 	spin_lock_init(&sbi->s_next_gen_lock);
 
@@ -3915,7 +3914,7 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 
 no_journal:
 	if (ext4_mballoc_ready) {
-		sbi->s_mb_cache = ext4_xattr_create_cache(sb->s_id);
+		sbi->s_mb_cache = ext4_xattr_create_cache();
 		if (!sbi->s_mb_cache) {
 			ext4_msg(sb, KERN_ERR, "Failed to create an mb_cache");
 			goto failed_mount_wq;
@@ -4147,6 +4146,10 @@ failed_mount4:
 	if (EXT4_SB(sb)->rsv_conversion_wq)
 		destroy_workqueue(EXT4_SB(sb)->rsv_conversion_wq);
 failed_mount_wq:
+	if (sbi->s_mb_cache) {
+		ext4_xattr_destroy_cache(sbi->s_mb_cache);
+		sbi->s_mb_cache = NULL;
+	}
 	if (sbi->s_journal) {
 		jbd2_journal_destroy(sbi->s_journal);
 		sbi->s_journal = NULL;
@@ -4976,10 +4979,21 @@ static int ext4_statfs(struct dentry *dentry, struct kstatfs *buf)
 		percpu_counter_sum_positive(&sbi->s_dirtyclusters_counter);
 	/* prevent underflow in case that few free space is available */
 	buf->f_bfree = EXT4_C2B(sbi, max_t(s64, bfree, 0));
-	buf->f_bavail = buf->f_bfree -
-			(ext4_r_blocks_count(es) + resv_blocks);
-	if (buf->f_bfree < (ext4_r_blocks_count(es) + resv_blocks))
-		buf->f_bavail = 0;
+#ifdef CONFIG_EXT4_RESERVE_SPACE_FILTER
+	/*reserved space is visible if have permission */
+	if (check_have_permission(0)) {
+		buf->f_bavail = buf->f_bfree - resv_blocks;
+		if (buf->f_bfree < resv_blocks)
+			buf->f_bavail = 0;
+	} else {
+#endif
+		buf->f_bavail = buf->f_bfree -
+		(ext4_r_blocks_count(es) + resv_blocks);
+		if (buf->f_bfree < (ext4_r_blocks_count(es) + resv_blocks))
+			buf->f_bavail = 0;
+#ifdef CONFIG_EXT4_RESERVE_SPACE_FILTER
+	}
+#endif
 	buf->f_files = le32_to_cpu(es->s_inodes_count);
 	buf->f_ffree = percpu_counter_sum_positive(&sbi->s_freeinodes_counter);
 	buf->f_namelen = EXT4_NAME_LEN;

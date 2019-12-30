@@ -44,6 +44,7 @@
 #include "truncate.h"
 
 #include <trace/events/ext4.h>
+#include <trace/events/android_fs.h>
 
 #define MPAGE_DA_EXTENT_TAIL 0x01
 
@@ -1029,6 +1030,16 @@ static int ext4_write_begin(struct file *file, struct address_space *mapping,
 	pgoff_t index;
 	unsigned from, to;
 
+	if (trace_android_fs_datawrite_start_enabled()) {
+		char *path, pathbuf[MAX_TRACE_PATHBUF_LEN];
+
+		path = android_fstrace_get_pathname(pathbuf,
+						    MAX_TRACE_PATHBUF_LEN,
+						    inode);
+		trace_android_fs_datawrite_start(inode, pos, len,
+						 current->pid, path,
+						 current->comm);
+	}
 	trace_ext4_write_begin(inode, pos, len, flags);
 	/*
 	 * Reserve one block more for addition to orphan list in case
@@ -1164,9 +1175,11 @@ static int ext4_write_end(struct file *file,
 	loff_t old_size = inode->i_size;
 	int ret = 0, ret2;
 	int i_size_changed = 0;
+	int inline_data = ext4_has_inline_data(inode);
 
+	trace_android_fs_datawrite_end(inode, pos, len);
 	trace_ext4_write_end(inode, pos, len, copied);
-	if (ext4_has_inline_data(inode)) {
+	if (inline_data) {
 		ret = ext4_write_inline_data_end(inode, pos, len,
 						 copied, page);
 		if (ret < 0) {
@@ -1194,7 +1207,7 @@ static int ext4_write_end(struct file *file,
 	 * ordering of page lock and transaction start for journaling
 	 * filesystems.
 	 */
-	if (i_size_changed)
+	if (i_size_changed || inline_data)
 		ext4_mark_inode_dirty(handle, inode);
 
 	if (pos + len > inode->i_size && ext4_can_truncate(inode))
@@ -1268,14 +1281,16 @@ static int ext4_journalled_write_end(struct file *file,
 	int partial = 0;
 	unsigned from, to;
 	int size_changed = 0;
+	int inline_data = ext4_has_inline_data(inode);
 
+	trace_android_fs_datawrite_end(inode, pos, len);
 	trace_ext4_journalled_write_end(inode, pos, len, copied);
 	from = pos & (PAGE_CACHE_SIZE - 1);
 	to = from + len;
 
 	BUG_ON(!ext4_handle_valid(handle));
 
-	if (ext4_has_inline_data(inode)) {
+	if (inline_data) {
 		ret = ext4_write_inline_data_end(inode, pos, len,
 						 copied, page);
 		if (ret < 0) {
@@ -1306,7 +1321,7 @@ static int ext4_journalled_write_end(struct file *file,
 	if (old_size < pos)
 		pagecache_isize_extended(inode, old_size, pos);
 
-	if (size_changed) {
+	if (size_changed || inline_data) {
 		ret2 = ext4_mark_inode_dirty(handle, inode);
 		if (!ret)
 			ret = ret2;
@@ -1804,11 +1819,7 @@ static int __ext4_journalled_writepage(struct page *page,
 	}
 
 	if (inline_data) {
-		BUFFER_TRACE(inode_bh, "get write access");
-		ret = ext4_journal_get_write_access(handle, inode_bh);
-
-		err = ext4_handle_dirty_metadata(handle, inode, inode_bh);
-
+		ret = ext4_mark_inode_dirty(handle, inode);
 	} else {
 		ret = ext4_walk_page_buffers(handle, page_bufs, 0, len, NULL,
 					     do_journal_get_write_access);
@@ -2400,23 +2411,13 @@ static int mpage_prepare_extent_to_map(struct mpage_da_data *mpd)
 	mpd->map.m_len = 0;
 	mpd->next_page = index;
 	while (index <= end) {
-		nr_pages = pagevec_lookup_tag(&pvec, mapping, &index, tag,
-			      min(end - index, (pgoff_t)PAGEVEC_SIZE-1) + 1);
+		nr_pages = pagevec_lookup_range_tag(&pvec, mapping, &index, end,
+				tag);
 		if (nr_pages == 0)
 			goto out;
 
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
-
-			/*
-			 * At this point, the page may be truncated or
-			 * invalidated (changing page->mapping to NULL), or
-			 * even swizzled back from swapper_space to tmpfs file
-			 * mapping. However, page->index will not change
-			 * because we have a reference on the page.
-			 */
-			if (page->index > end)
-				goto out;
 
 			/*
 			 * Accumulated enough dirty pages? This doesn't apply
@@ -2760,6 +2761,16 @@ static int ext4_da_write_begin(struct file *file, struct address_space *mapping,
 					len, flags, pagep, fsdata);
 	}
 	*fsdata = (void *)0;
+	if (trace_android_fs_datawrite_start_enabled()) {
+		char *path, pathbuf[MAX_TRACE_PATHBUF_LEN];
+
+		path = android_fstrace_get_pathname(pathbuf,
+						    MAX_TRACE_PATHBUF_LEN,
+						    inode);
+		trace_android_fs_datawrite_start(inode, pos, len,
+						 current->pid,
+						 path, current->comm);
+	}
 	trace_ext4_da_write_begin(inode, pos, len, flags);
 
 	if (ext4_test_inode_state(inode, EXT4_STATE_MAY_INLINE_DATA)) {
@@ -2878,6 +2889,7 @@ static int ext4_da_write_end(struct file *file,
 		return ext4_write_end(file, mapping, pos,
 				      len, copied, page, fsdata);
 
+	trace_android_fs_datawrite_end(inode, pos, len);
 	trace_ext4_da_write_end(inode, pos, len, copied);
 	start = pos & (PAGE_CACHE_SIZE - 1);
 	end = start + copied - 1;
@@ -3366,12 +3378,42 @@ static ssize_t ext4_direct_IO(struct kiocb *iocb, struct iov_iter *iter,
 	if (ext4_has_inline_data(inode))
 		return 0;
 
+	if (trace_android_fs_dataread_start_enabled() &&
+	    (iov_iter_rw(iter) == READ)) {
+		char *path, pathbuf[MAX_TRACE_PATHBUF_LEN];
+
+		path = android_fstrace_get_pathname(pathbuf,
+						    MAX_TRACE_PATHBUF_LEN,
+						    inode);
+		trace_android_fs_dataread_start(inode, offset, count,
+						current->pid, path,
+						current->comm);
+	}
+	if (trace_android_fs_datawrite_start_enabled() &&
+	    (iov_iter_rw(iter) == WRITE)) {
+		char *path, pathbuf[MAX_TRACE_PATHBUF_LEN];
+
+		path = android_fstrace_get_pathname(pathbuf,
+						    MAX_TRACE_PATHBUF_LEN,
+						    inode);
+		trace_android_fs_datawrite_start(inode, offset, count,
+						 current->pid, path,
+						 current->comm);
+	}
 	trace_ext4_direct_IO_enter(inode, offset, count, iov_iter_rw(iter));
 	if (ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS))
 		ret = ext4_ext_direct_IO(iocb, iter, offset);
 	else
 		ret = ext4_ind_direct_IO(iocb, iter, offset);
 	trace_ext4_direct_IO_exit(inode, offset, count, iov_iter_rw(iter), ret);
+
+	if (trace_android_fs_dataread_start_enabled() &&
+	    (iov_iter_rw(iter) == READ))
+		trace_android_fs_dataread_end(inode, offset, count);
+	if (trace_android_fs_datawrite_start_enabled() &&
+	    (iov_iter_rw(iter) == WRITE))
+		trace_android_fs_datawrite_end(inode, offset, count);
+
 	return ret;
 }
 
@@ -3694,6 +3736,7 @@ int ext4_update_disksize_before_punch(struct inode *inode, loff_t offset,
 
 int ext4_punch_hole(struct inode *inode, loff_t offset, loff_t length)
 {
+#if 0
 	struct super_block *sb = inode->i_sb;
 	ext4_lblk_t first_block, stop_block;
 	struct address_space *mapping = inode->i_mapping;
@@ -3824,6 +3867,12 @@ out_dio:
 out_mutex:
 	mutex_unlock(&inode->i_mutex);
 	return ret;
+#else
+	/*
+	 * Disabled as per b/28760453
+	 */
+	return -EOPNOTSUPP;
+#endif
 }
 
 int ext4_inode_attach_jinode(struct inode *inode)
@@ -4143,8 +4192,11 @@ void ext4_set_inode_flags(struct inode *inode)
 		new_fl |= S_DIRSYNC;
 	if (test_opt(inode->i_sb, DAX))
 		new_fl |= S_DAX;
+	if (flags & EXT4_ENCRYPT_FL)
+		new_fl |= S_ENCRYPTED;
 	inode_set_flags(inode, new_fl,
-			S_SYNC|S_APPEND|S_IMMUTABLE|S_NOATIME|S_DIRSYNC|S_DAX);
+			S_SYNC|S_APPEND|S_IMMUTABLE|S_NOATIME|S_DIRSYNC|S_DAX|
+			S_ENCRYPTED);
 }
 
 /* Propagate flags from i_flags to EXT4_I(inode)->i_flags */

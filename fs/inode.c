@@ -922,6 +922,13 @@ void lockdep_annotate_inode_mutex_key(struct inode *inode)
 			/*
 			 * ensure nobody is actually holding i_mutex
 			 */
+			if (unlikely(mutex_is_locked(&inode->i_mutex))) {
+				pr_info("filesystem=[%s], pid=%d[%s], i_ino=%ld\n",
+					type->name, current->pid, current->comm,
+					inode->i_ino);
+				WARN_ON(1);
+				return;
+			}
 			mutex_destroy(&inode->i_mutex);
 			mutex_init(&inode->i_mutex);
 			lockdep_set_class(&inode->i_mutex,
@@ -1715,7 +1722,7 @@ int dentry_needs_remove_privs(struct dentry *dentry)
 }
 EXPORT_SYMBOL(dentry_needs_remove_privs);
 
-static int __remove_privs(struct dentry *dentry, int kill)
+static int __remove_privs(struct vfsmount *mnt, struct dentry *dentry, int kill)
 {
 	struct iattr newattrs;
 
@@ -1724,7 +1731,7 @@ static int __remove_privs(struct dentry *dentry, int kill)
 	 * Note we call this on write, so notify_change will not
 	 * encounter any conflicting delegations:
 	 */
-	return notify_change(dentry, &newattrs, NULL);
+	return notify_change2(mnt, dentry, &newattrs, NULL);
 }
 
 /*
@@ -1746,7 +1753,7 @@ int file_remove_privs(struct file *file)
 	if (kill < 0)
 		return kill;
 	if (kill)
-		error = __remove_privs(dentry, kill);
+		error = __remove_privs(file->f_path.mnt, dentry, kill);
 	if (!error)
 		inode_has_no_xattr(inode);
 
@@ -1937,8 +1944,14 @@ void inode_init_owner(struct inode *inode, const struct inode *dir,
 	inode->i_uid = current_fsuid();
 	if (dir && dir->i_mode & S_ISGID) {
 		inode->i_gid = dir->i_gid;
+
+		/* Directories are special, and always inherit S_ISGID */
 		if (S_ISDIR(mode))
 			mode |= S_ISGID;
+		else if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP) &&
+			 !in_group_p(inode->i_gid) &&
+			 !capable_wrt_inode_uidgid(dir, CAP_FSETID))
+			mode &= ~S_ISGID;
 	} else
 		inode->i_gid = current_fsgid();
 	inode->i_mode = mode;
