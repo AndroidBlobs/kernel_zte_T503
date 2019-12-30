@@ -247,9 +247,11 @@ static int input_handle_abs_event(struct input_dev *dev,
 	if (pold) {
 		*pval = input_defuzz_abs_event(*pval, *pold,
 						dev->absinfo[code].fuzz);
-		if (*pold == *pval)
+		/* set flat -1 to indicate not return INPUT_IGNORE_EVENT */
+		if (dev->absinfo[code].flat !=  -1) {
+		    if ((*pold == *pval) && (code != ABS_DISTANCE))
 			return INPUT_IGNORE_EVENT;
-
+		}
 		*pold = *pval;
 	}
 
@@ -667,6 +669,33 @@ void input_close_device(struct input_handle *handle)
 	mutex_unlock(&dev->mutex);
 }
 EXPORT_SYMBOL(input_close_device);
+#ifdef CONFIG_GPIOKEY_EVENT_FILTER
+extern int is_gpio_key_wakeup_and_pressed(struct input_dev *dev, int code);
+
+/*
+ * Simulate keyup events for all keys that are marked as pressed.
+ * The function must be called with dev->event_lock held.
+ */
+static void input_dev_release_gpio_keys(struct input_dev *dev)
+{
+	int code;
+	int num = 0;
+
+	if (is_event_supported(EV_KEY, dev->evbit, EV_MAX)) {
+		for (code = 0; code <= KEY_MAX; code++) {
+			if (is_event_supported(code, dev->keybit, KEY_MAX) &&
+				(is_gpio_key_wakeup_and_pressed(dev, code) == 0) &&
+			    __test_and_clear_bit(code, dev->key)) {
+				input_pass_event(dev, EV_KEY, code, 0);
+				num++;
+			}
+		}
+		if (num)
+			input_pass_event(dev, EV_SYN, SYN_REPORT, 1);
+	}
+}
+#endif
+
 
 /*
  * Simulate keyup events for all keys that are marked as pressed.
@@ -679,8 +708,10 @@ static void input_dev_release_keys(struct input_dev *dev)
 
 	if (is_event_supported(EV_KEY, dev->evbit, EV_MAX)) {
 		for_each_set_bit(code, dev->key, KEY_CNT) {
+			if  (code != KEY_F21) {
 			input_pass_event(dev, EV_KEY, code, 0);
 			need_sync = true;
+				}
 		}
 
 		if (need_sync)
@@ -1668,11 +1699,18 @@ void input_reset_device(struct input_dev *dev)
 	spin_lock_irqsave(&dev->event_lock, flags);
 
 	input_dev_toggle(dev, true);
+	#ifdef CONFIG_GPIOKEY_EVENT_FILTER
+	if (dev->phys && !strcmp(dev->phys, "gpio-keys/input0"))
+		input_dev_release_gpio_keys(dev);
+	else
+		input_dev_release_keys(dev);
+	#else
 	input_dev_release_keys(dev);
-
+	#endif
 	spin_unlock_irqrestore(&dev->event_lock, flags);
 	mutex_unlock(&dev->mutex);
 }
+
 EXPORT_SYMBOL(input_reset_device);
 
 #ifdef CONFIG_PM_SLEEP
