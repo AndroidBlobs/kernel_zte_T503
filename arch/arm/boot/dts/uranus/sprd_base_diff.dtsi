@@ -1,0 +1,18 @@
+/*
+ * this file is ued to change sprd dtsi which can't be changed by overlay
+ * such as /delete-node/ /delete-property/ and alises
+ */
+
+#include "../lcd/zte_lcd_skyworth_jd9366d_panda_5p45_720p.dtsi"
+#include "touchscreen_uranus.dtsi"
+&panel_if {
+	panel-drivers = <
+		&lcd_skyworth_jd9363d_panda_mipi_hd
+		&lcd_dummy_mipi_hd
+	>;
+};
+
+&sound_vbc_r1p0v3_sprd_codec {
+	/delete-property/ sprd,smartamp-boost-names;
+	/delete-property/ sprd,smartamp-boost-gpios;
+};

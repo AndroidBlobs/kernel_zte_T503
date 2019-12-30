@@ -1,0 +1,21 @@
+/*
+ * this file is ued to change sprd dtsi which can't be changed by overlay
+ * such as /delete-node/ /delete-property/ and alises
+ */
+
+#include "../lcd/zte_lcd_lcetron_otm8019a_ctc_4p95_480p.dtsi"
+#include "../lcd/zte_lcd_lead_otm8019a_ctc_4p95_480p.dtsi"
+#include "../lcd/zte_lcd_easyquick_st7701_hsd_4p95_480p.dtsi"
+&panel_if {
+	panel-drivers = <
+		&lcd_lcetron_otm8019a_ctc_mipi_hd
+		&lcd_lead_otm8019a_ctc_mipi_hd
+		&lcd_easyquick_st7701_hsd_mipi_hd
+		&lcd_dummy_mipi_hd
+	>;
+};
+
+&sound_vbc_r1p0v3_sprd_codec {
+	/delete-property/ sprd,smartamp-boost-names;
+	/delete-property/ sprd,smartamp-boost-gpios;
+};
