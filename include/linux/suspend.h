@@ -406,6 +406,10 @@ static inline bool hibernation_available(void) { return false; }
 #define PM_POST_SUSPEND		0x0004 /* Suspend finished */
 #define PM_RESTORE_PREPARE	0x0005 /* Going to restore a saved image */
 #define PM_POST_RESTORE		0x0006 /* Restore failed */
+#ifdef CONFIG_SPRD_CPU_HOTPLUG_GOV
+#define PM_STOP_CPU_DYNAMIC_HOTPLUG	0x0010 /* stop dynamic hotplug */
+#define PM_SUSPEND_PREPARE_FAILED	0x0011 /* suspend state not supported */
+#endif
 
 extern struct mutex pm_mutex;
 
@@ -435,6 +439,7 @@ extern bool pm_get_wakeup_count(unsigned int *count, bool block);
 extern bool pm_save_wakeup_count(unsigned int count);
 extern void pm_wakep_autosleep_enabled(bool set);
 extern void pm_print_active_wakeup_sources(void);
+extern void pm_get_active_wakeup_sources(char *pending_sources, size_t max);
 
 static inline void lock_system_sleep(void)
 {
